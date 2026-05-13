@@ -1,0 +1,108 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
+from tensorflow.keras.models import load_model
+
+print("=== BƯỚC 0: TẢI MÔ HÌNH ĐÃ LƯU ===")
+# Tải lại mô hình Seq2Seq đã lưu
+loaded_seq2seq_model = load_model('checkpoint/seq2seq_anomaly_model.keras')
+print("Đã tải mô hình thành công lên bộ nhớ!")
+
+print("\n=== BƯỚC 1: DỰ BÁO VÀ TÍNH ANOMALY SCORE (SEQ2SEQ) ===")
+
+# 1. Dự báo trên tập Test
+# SỬ DỤNG MÔ HÌNH VỪA TẢI ĐỂ DỰ BÁO
+pred_test_seq = loaded_seq2seq_model.predict(X_test_seq)
+print(pred_test_seq.shape)
+
+# 2. Tính Anomaly Score bằng MAE của từng cửa sổ
+# Lấy |Thực tế - Dự báo| của cả 10 bước, sau đó tính trung bình (axis=1)
+# Kết quả trả về một mảng 1D chứa Score của từng cửa sổ trượt.
+test_score_seq = np.mean(np.abs(y_test_seq - pred_test_seq), axis=1).flatten()
+# print(pred_test_seq[0])
+print(f"Đã tính xong Score cho {len(test_score_seq)} cửa sổ.")
+
+
+print("\n=== BƯỚC 2: XÂY DỰNG NGƯỠNG ĐỘNG ===")
+
+# --- TÌM ĐIỂM NGỌT CHO NGƯỠNG ĐỘNG ---
+ROLLING_WINDOW = 100
+K_STD = 2
+SHIFT_STEPS = 50
+
+score_series = pd.Series(test_score_seq)
+
+# Dịch chuyển và tính trung bình/độ lệch chuẩn trượt
+rolling_mean = score_series.shift(SHIFT_STEPS).rolling(window=ROLLING_WINDOW, min_periods=1).mean().bfill()
+# rolling_std = score_series.shift(SHIFT_STEPS).rolling(window=ROLLING_WINDOW, min_periods=1).std().bfill()
+
+val_std_fixed = np.std(val_mae_loss)
+
+# Hạ đệm Epsilon xuống mức vừa phải
+epsilon = 1e-4
+# Tính toán Adaptive Threshold
+
+# adaptive_threshold = rolling_mean + K_STD * (rolling_std + epsilon)
+# adaptive_threshold = adaptive_threshold.values
+
+adaptive_threshold = rolling_mean + (K_STD * val_std_fixed) + epsilon
+adaptive_threshold = adaptive_threshold.values
+
+print("\n=== BƯỚC 3: ĐÁNH GIÁ METRICS VÀ SO SÁNH ===")
+
+# Phân loại Anomaly: Nếu Score > Adaptive_Threshold tại thời điểm t -> Bất thường (1)
+pred_anomalies_seq = (test_score_seq > adaptive_threshold).astype(int)
+
+# Tính toán các chỉ số
+precision_seq, recall_seq, f1_seq, _ = precision_recall_fscore_support(
+    y_test_labels_seq, pred_anomalies_seq, average='binary'
+)
+
+# Tính AUROC
+auroc_seq = roc_auc_score(y_test_labels_seq, test_score_seq)
+
+print("KẾT QUẢ MÔ HÌNH 2 (SEQ2SEQ + ADAPTIVE THRESHOLD):")
+print(f"Precision: {precision_seq:.4f}")
+print(f"Recall:    {recall_seq:.4f}")
+print(f"F1-Score:  {f1_seq:.4f}")
+print(f"AUROC:     {auroc_seq:.4f}")
+
+
+print("\n=== BƯỚC 4: VẼ BIỂU ĐỒ TRỰC QUAN ===")
+
+# Tạo hình ảnh gồm 2 biểu đồ (Subplots) để thấy rõ sự khác biệt
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12), sharex=True)
+
+# --- Biểu đồ 1: Anomaly Score và Ngưỡng động ---
+ax1.plot(test_score_seq, label='Anomaly Score (MAE của 10 bước)', color='blue', alpha=0.6)
+ax1.plot(adaptive_threshold, label=f'Adaptive Threshold', color='red', linestyle='dashed')
+ax1.set_title("Biến động của Anomaly Score và Ngưỡng động (Adaptive Threshold)")
+ax1.set_ylabel("Score")
+ax1.legend()
+ax1.grid(True)
+
+# --- Biểu đồ 2: Kết quả phát hiện trên dữ liệu gốc ---
+# Vì y_test_seq là mảng 3D, ta chỉ lấy phần tử đầu tiên của mỗi cửa sổ để vẽ đường gốc
+y_test_plot = y_test_seq[:, 0, 0]
+pred_test_plot = pred_test_seq[:, 0, 0]
+
+ax2.plot(y_test_plot, label='Dữ liệu thực tế', color='green', alpha=0.5)
+ax2.plot(pred_test_plot, label='Dự báo AI', color='magenta', linestyle='dashed', alpha=0.8)
+
+# Tô màu các điểm Bất thường thực tế (Ground Truth)
+anomaly_indices = np.where(y_test_labels_seq == 1)[0]
+ax2.scatter(anomaly_indices, y_test_plot[anomaly_indices], color='red', label='Lỗi thực tế (Label)', s=50)
+
+# Tô màu các điểm Mô hình phát hiện
+pred_indices = np.where(pred_anomalies_seq == 1)[0]
+ax2.scatter(pred_indices, y_test_plot[pred_indices], marker='x', color='black', label='Mô hình phát hiện', s=50)
+
+ax2.set_title("Kết quả phát hiện Bất thường ")
+ax2.set_xlabel("Time Steps")
+ax2.set_ylabel("Value")
+ax2.legend()
+ax2.grid(True)
+
+plt.tight_layout()
+plt.show()
