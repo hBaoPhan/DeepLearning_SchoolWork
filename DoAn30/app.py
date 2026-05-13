@@ -84,7 +84,7 @@ def update_charts(data_placeholder, score_placeholder, metric_placeholder, resul
             ax_data.scatter(anom_indices, [display_data[j] for j, val in enumerate(display_anoms) if val == 1], 
                              color='brown', marker='x', s=80, label='AI Cảnh báo', zorder=6)
         
-        ax_data.set_title("📡 Đối chiếu AI vs Thực tế")
+        ax_data.set_title("Đối chiếu AI vs Thực tế")
         ax_data.set_ylim(-0.1, 1.5)
         ax_data.legend(loc='upper right', fontsize='small')
         st.pyplot(fig_data)
